@@ -2,43 +2,10 @@ use std::time::Duration;
 
 use futures::future::select_all;
 use futures::FutureExt;
+use scheduler::{Signal, ALL_INTERESTING_SIGNALS};
 use tokio::signal::unix;
 
-type WonkyResult<T> = Result<T, &'static str>;
-
-// The signals documented by SignalKind, expect for SIGINFO (which does not exist on Linux).
-const ALL_SIGNALS: &[libc::c_int] = &[
-    // By default, these signals terminate the process:
-    libc::SIGALRM, // A real-time timer has expired.
-    libc::SIGHUP,  // The terminal is disconnected.
-    libc::SIGINT,  // Interrupt a program.
-    libc::SIGPIPE, // The process attempts to write to a pipe which has no reader.
-    libc::SIGQUIT, // Issue a shutdown of the process, after which the OS will dump the process core.
-    libc::SIGTERM, // Issue a shutdown of the process.
-    libc::SIGUSR1, // A user defined signal.
-    libc::SIGUSR2, // A user defined signal.
-    // By default, these signals are ignored by the process:
-    libc::SIGIO,    // When I/O operations are possible on some file descriptor.
-    libc::SIGCHLD,  // The status of a child process has changed.
-    libc::SIGWINCH, // The terminal window is resized.
-];
-
-fn show(signal: libc::c_int) -> &'static str {
-    match signal {
-        libc::SIGALRM => "SIGALRM",
-        libc::SIGCHLD => "SIGCHLD",
-        libc::SIGHUP => "SIGHUP",
-        libc::SIGINT => "SIGINT",
-        libc::SIGIO => "SIGIO",
-        libc::SIGPIPE => "SIGPIPE",
-        libc::SIGQUIT => "SIGQUIT",
-        libc::SIGTERM => "SIGTERM",
-        libc::SIGUSR1 => "SIGUSR1",
-        libc::SIGUSR2 => "SIGUSR2",
-        libc::SIGWINCH => "SIGWINCH",
-        _ => "UNKNOWN",
-    }
-}
+type WonkyResult<T> = Result<T, String>;
 
 #[tokio::main]
 async fn main() -> WonkyResult<()> {
@@ -46,9 +13,10 @@ async fn main() -> WonkyResult<()> {
     println!("{pid}");
 
     // prepare signal handler futures
-    let handle_signals = ALL_SIGNALS
+    let handle_signals = ALL_INTERESTING_SIGNALS
         .iter()
-        .map(|&signal| print_signal_arrival(signal).boxed());
+        .map(check_signal_occurence)
+        .map(FutureExt::boxed);
 
     // prepare real work future
     let do_work = std::iter::once(my_real_task().boxed());
@@ -70,13 +38,12 @@ async fn my_real_task() -> WonkyResult<()> {
     }
 }
 
-async fn print_signal_arrival(signal: libc::c_int) -> WonkyResult<()> {
-    let signal_name = show(signal);
-    let mut stream =
-        unix::signal(unix::SignalKind::from_raw(signal)).expect("Failed to register {signal_name}");
+async fn check_signal_occurence(signal: &Signal) -> WonkyResult<()> {
+    let mut stream = unix::signal(unix::SignalKind::from_raw(**signal))
+        .expect("Failed to register {signal_name}");
     loop {
         if stream.recv().await.is_some() {
-            return Err(signal_name);
+            return Err(signal.to_string());
         };
     }
 }
