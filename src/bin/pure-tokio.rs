@@ -1,4 +1,3 @@
-use libc;
 use scheduler::{Signal, ALL_INTERESTING_SIGNALS};
 use tokio::signal::unix;
 use tokio::task::JoinSet;
