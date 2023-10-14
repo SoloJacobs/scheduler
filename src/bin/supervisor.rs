@@ -1,8 +1,9 @@
 use clap::Parser;
 use std::io::{self, Write};
-use std::process::Command;
-use std::thread::sleep;
-use std::time::Duration;
+use tokio::process::Command;
+use tokio::signal::ctrl_c;
+use tokio::time;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
 struct Arguments {
@@ -14,17 +15,52 @@ struct Arguments {
     arguments: Vec<String>,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    let pid = std::process::id();
+    println!("{pid}");
     let arguments = Arguments::parse();
 
     let mut command = Command::new(arguments.command);
     command.args(arguments.arguments);
 
+    let interval = time::interval(time::Duration::from_secs(arguments.interval));
+
+    let token = CancellationToken::new();
+    let k = tokio::spawn(run(command, interval, token.clone()));
+    let _ = ctrl_c().await;
+    token.cancel();
+    let _ = k.await;
+}
+
+fn kill_gracefully(child_id: i32) {
+    unsafe {
+        libc::kill(child_id, libc::SIGTERM);
+    }
+}
+
+async fn run(mut command: Command, mut interval: time::Interval, token: CancellationToken) {
     loop {
-        let output = command.output().expect("Failed to execute command");
-        io::stdout().write_all(&output.stdout).unwrap();
-        io::stderr().write_all(&output.stderr).unwrap();
-        println!("{:?}", output.status.code());
-        sleep(Duration::from_secs(arguments.interval));
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = token.cancelled() => { return }
+        }
+        println!("Starting");
+        let child = command.spawn().expect("Failed to execute command");
+        if let Some(child_id) = child.id() {
+            tokio::select! {
+                output = child.wait_with_output() => {
+                    let outcome = output.expect("Failed to execute command");
+                    io::stdout().write_all(&outcome.stdout).unwrap();
+                    io::stderr().write_all(&outcome.stderr).unwrap();
+                    println!("{:?}", outcome.status.code());
+                }
+                _ = token.cancelled() => {
+                    println!("KILLING");
+                    kill_gracefully(child_id as i32);
+                    return
+                }
+            }
+        }
     }
 }
