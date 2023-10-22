@@ -4,6 +4,7 @@ use tokio::process::Command;
 use tokio::signal::ctrl_c;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
+use scheduler::sys::linux::kill_gracefully;
 
 #[derive(Parser)]
 struct Arguments {
@@ -31,12 +32,6 @@ async fn main() {
     let _ = ctrl_c().await;
     token.cancel();
     let _ = k.await;
-}
-
-fn kill_gracefully(child_id: i32) {
-    unsafe {
-        libc::kill(child_id, libc::SIGTERM);
-    }
 }
 
 async fn run(mut command: Command, mut interval: time::Interval, token: CancellationToken) {
