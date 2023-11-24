@@ -1,10 +1,10 @@
 use clap::Parser;
+use scheduler::sys;
 use std::io::{self, Write};
 use tokio::process::Command;
 use tokio::signal::ctrl_c;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
-use scheduler::sys::linux::kill_gracefully;
 
 #[derive(Parser)]
 struct Arguments {
@@ -52,7 +52,11 @@ async fn run(mut command: Command, mut interval: time::Interval, token: Cancella
                 }
                 _ = token.cancelled() => {
                     println!("KILLING");
-                    kill_gracefully(child_id as i32);
+                    #[cfg(target_os="linux")]
+                    sys::linux::kill_gracefully(child_id as i32);
+
+                    #[cfg(target_os="windows")]
+                    sys::windows::kill_gracefully();
                     return
                 }
             }
