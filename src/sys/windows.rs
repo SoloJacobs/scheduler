@@ -1,10 +1,11 @@
 #![cfg(target_os = "windows")]
+use windows::Win32::System::Console::GenerateConsoleCtrlEvent;
+use windows::Win32::System::Console::SetConsoleCtrlHandler;
+use windows::Win32::System::Console::CTRL_C_EVENT;
 
-pub fn interrupt(pid: str) {
-    use windows::Win32::System::Console;
+pub fn kill_gracefully() {
     {
-        unsafe { Console::AttachConsole(pid) }.expect("PLEASE");
-        unsafe { Console::GenerateConsoleCtrlEvent(Console::CTRL_C_EVENT, pid) }
-            .expect("FAILED");
+        unsafe { SetConsoleCtrlHandler(None, true).expect("ERROR") };
+        unsafe { GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0).expect("ERROR") };
     }
 }

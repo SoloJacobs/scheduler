@@ -1,4 +1,4 @@
-#![cfg(target_os="linux")]
+#![cfg(target_os = "linux")]
 use libc;
 
 pub fn interrupt(pid: i32) {
@@ -12,4 +12,3 @@ pub fn kill_gracefully(child_id: i32) {
         libc::kill(child_id, libc::SIGTERM);
     }
 }
-
