@@ -1,11 +1,11 @@
 use clap::Parser;
 use scheduler::sys;
 use std::fs::{self, File};
-use std::path::{Path, PathBuf};
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tokio::signal::ctrl_c;
-use tokio::time;
+use tokio::time::{Duration, interval, Interval};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
@@ -27,31 +27,32 @@ async fn main() {
     let mut command = Command::new(arguments.command);
     command.args(arguments.arguments);
 
-    let interval = time::interval(time::Duration::from_secs(arguments.interval));
+    let interval = interval(Duration::from_secs(arguments.interval));
 
     let token = CancellationToken::new();
-    let runner = tokio::spawn(run(
+    tokio::spawn(listen_for_shutdown(token.clone()));
+    run(
         command,
         interval,
         token.clone(),
         arguments.working_directory.clone(),
-    ));
-    let _ = ctrl_c().await;
-    token.cancel();
-    let _ = runner.await;
+    ).await;
 }
 
 async fn run(
     mut command: Command,
-    mut interval: time::Interval,
+    mut interval: Interval,
     token: CancellationToken,
-    working_directory: std::path::PathBuf,
+    working_directory: PathBuf,
 ) {
     let mut i = 0;
     loop {
         tokio::select! {
             _instant = interval.tick() => { }
-            _ = token.cancelled() => { return }
+            _ = token.cancelled() => {
+                    println!("Stopping");
+                    return
+            }
         }
         println!("Starting");
 
@@ -81,17 +82,25 @@ async fn run(
 }
 
 #[derive(Debug)]
-struct WithPath{
+struct WithPath {
+    #[allow(dead_code)]
     error: io::Error,
+    #[allow(dead_code)]
     path: PathBuf,
 }
 
 fn create_file(path: &Path) -> Result<File, WithPath> {
-    File::create(path).map_err(|error| WithPath{error, path: path.into()})
+    File::create(path).map_err(|error| WithPath {
+        error,
+        path: path.into(),
+    })
 }
 
 fn create_dir(path: &Path) -> Result<(), WithPath> {
-    fs::create_dir(path).map_err(|error| WithPath{error, path: path.into()})
+    fs::create_dir(path).map_err(|error| WithPath {
+        error,
+        path: path.into(),
+    })
 }
 
 fn setup(mut command: Command, run_directory: &Path) -> Command {
@@ -101,4 +110,9 @@ fn setup(mut command: Command, run_directory: &Path) -> Command {
     command.stdout(stdout);
     command.stderr(stderr);
     command
+}
+
+async fn listen_for_shutdown(token: CancellationToken) {
+    ctrl_c().await.unwrap();
+    token.cancel();
 }
