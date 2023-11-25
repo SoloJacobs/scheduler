@@ -17,6 +17,8 @@ struct Arguments {
     working_directory: PathBuf,
     #[arg(short, long, default_value = "60")]
     interval: u64,
+    #[arg(short, long, default_value = "30")]
+    timeout: u64,
     #[clap(last = true)]
     arguments: Vec<String>,
 }
@@ -27,6 +29,7 @@ async fn main() {
         command,
         working_directory,
         interval,
+        timeout,
         arguments,
     } = Arguments::parse();
 
@@ -36,13 +39,14 @@ async fn main() {
     let token = CancellationToken::new();
     tokio::spawn(listen_for_shutdown(token.clone()));
 
-    run(command, interval, token, working_directory).await;
+    run(command, interval, timeout, &token, working_directory).await;
 }
 
 async fn run(
     mut command: Command,
     interval: u64,
-    token: CancellationToken,
+    timeout: u64,
+    token: &CancellationToken,
     working_directory: PathBuf,
 ) {
     let start = Instant::now();
@@ -61,7 +65,7 @@ async fn run(
         let mut status = create_file(&run_directory.join("status")).unwrap();
         println!("Starting");
         let mut child = command.spawn().expect("Failed to execute command");
-        let outcome = wait_with_output(&mut child, &token).await;
+        let outcome = wait_with_output(&mut child, timeout, token).await;
         status
             .write_all(format!("{:?}", outcome).as_bytes())
             .unwrap();
@@ -107,24 +111,33 @@ async fn listen_for_shutdown(token: CancellationToken) {
 #[derive(Debug)]
 enum Outcome {
     Cancelled,
+    TimedOut,
     Complete(ExitStatus),
 }
 
-async fn wait_with_output(child: &mut Child, token: &CancellationToken) -> Outcome {
+async fn wait_with_output(child: &mut Child, timeout: u64, token: &CancellationToken) -> Outcome {
     tokio::select! {
         output = child.wait() => {
             Outcome::Complete(output.unwrap())
         }
+        _ = time::sleep(Duration::from_secs(timeout)) => {
+            kill(child);
+            Outcome::TimedOut
+        }
         _ = token.cancelled() => {
-            if let Some(id) = child.id() {
-                println!("KILLING");
-                #[cfg(target_os="linux")]
-                sys::linux::kill_gracefully(id as i32);
-
-                #[cfg(target_os="windows")]
-                sys::windows::kill_gracefully();
-            }
+            kill(child);
             Outcome::Cancelled
         }
+    }
+}
+
+fn kill(child: &mut Child) {
+    if let Some(id) = child.id() {
+        println!("KILLING");
+        #[cfg(target_os="linux")]
+        sys::linux::kill_gracefully(id as i32);
+
+        #[cfg(target_os="windows")]
+        sys::windows::kill_gracefully();
     }
 }
