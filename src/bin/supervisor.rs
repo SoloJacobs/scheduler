@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use tokio::process::{Child, Command};
 use tokio::signal::ctrl_c;
-use tokio::time::{interval, Duration, Interval};
+use tokio::time::{self, Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
@@ -23,49 +23,48 @@ struct Arguments {
 
 #[tokio::main]
 async fn main() {
-    let arguments = Arguments::parse();
+    let Arguments {
+        command,
+        working_directory,
+        interval,
+        arguments,
+    } = Arguments::parse();
 
-    let mut command = Command::new(arguments.command);
-    command.args(arguments.arguments);
-
-    let interval = interval(Duration::from_secs(arguments.interval));
+    let mut command = Command::new(command);
+    command.args(arguments);
 
     let token = CancellationToken::new();
     tokio::spawn(listen_for_shutdown(token.clone()));
-    run(
-        command,
-        interval,
-        token.clone(),
-        arguments.working_directory.clone(),
-    )
-    .await;
+
+    run(command, interval, token, working_directory).await;
 }
 
 async fn run(
     mut command: Command,
-    mut interval: Interval,
+    interval: u64,
     token: CancellationToken,
     working_directory: PathBuf,
 ) {
-    let mut i = 0;
+    let start = Instant::now();
+    let mut clock = time::interval_at(start, Duration::from_secs(interval));
     loop {
-        let run_directory = working_directory.join(format!("{i}"));
-        command = setup(command, &run_directory);
-        let mut status = create_file(&run_directory.join("status")).unwrap();
-        tokio::select! {
-            _instant = interval.tick() => { }
+        let instant = tokio::select! {
+            instant = clock.tick() => { instant }
             _ = token.cancelled() => {
                     println!("Stopping");
                     return
             }
-        }
+        };
+        let name = instant.duration_since(start).as_secs();
+        let run_directory = working_directory.join(format!("{name}"));
+        command = setup(command, &run_directory);
+        let mut status = create_file(&run_directory.join("status")).unwrap();
         println!("Starting");
         let mut child = command.spawn().expect("Failed to execute command");
         let outcome = wait_with_output(&mut child, &token).await;
         status
             .write_all(format!("{:?}", outcome).as_bytes())
             .unwrap();
-        i += 1;
     }
 }
 
