@@ -3,9 +3,10 @@ use scheduler::sys;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
+use std::process::ExitStatus;
+use tokio::process::{Child, Command};
 use tokio::signal::ctrl_c;
-use tokio::time::{Duration, interval, Interval};
+use tokio::time::{interval, Duration, Interval};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
@@ -36,7 +37,8 @@ async fn main() {
         interval,
         token.clone(),
         arguments.working_directory.clone(),
-    ).await;
+    )
+    .await;
 }
 
 async fn run(
@@ -47,6 +49,9 @@ async fn run(
 ) {
     let mut i = 0;
     loop {
+        let run_directory = working_directory.join(format!("{i}"));
+        command = setup(command, &run_directory);
+        let mut status = create_file(&run_directory.join("status")).unwrap();
         tokio::select! {
             _instant = interval.tick() => { }
             _ = token.cancelled() => {
@@ -55,28 +60,11 @@ async fn run(
             }
         }
         println!("Starting");
-
-        let run_directory = working_directory.join(format!("{i}"));
-        command = setup(command, &run_directory);
-        let mut status = create_file(&run_directory.join("status")).unwrap();
-        let child = command.spawn().expect("Failed to execute command");
-        if let Some(child_id) = child.id() {
-            tokio::select! {
-                output = child.wait_with_output() => {
-                    let outcome = output.expect("Failed to execute command");
-                    status.write_all(format!("{:?}", outcome.status).as_bytes()).unwrap();
-                }
-                _ = token.cancelled() => {
-                    println!("KILLING");
-                    #[cfg(target_os="linux")]
-                    sys::linux::kill_gracefully(child_id as i32);
-
-                    #[cfg(target_os="windows")]
-                    sys::windows::kill_gracefully();
-                    return
-                }
-            }
-        }
+        let mut child = command.spawn().expect("Failed to execute command");
+        let outcome = wait_with_output(&mut child, &token).await;
+        status
+            .write_all(format!("{:?}", outcome).as_bytes())
+            .unwrap();
         i += 1;
     }
 }
@@ -115,4 +103,29 @@ fn setup(mut command: Command, run_directory: &Path) -> Command {
 async fn listen_for_shutdown(token: CancellationToken) {
     ctrl_c().await.unwrap();
     token.cancel();
+}
+
+#[derive(Debug)]
+enum Outcome {
+    Cancelled,
+    Complete(ExitStatus),
+}
+
+async fn wait_with_output(child: &mut Child, token: &CancellationToken) -> Outcome {
+    tokio::select! {
+        output = child.wait() => {
+            Outcome::Complete(output.unwrap())
+        }
+        _ = token.cancelled() => {
+            if let Some(id) = child.id() {
+                println!("KILLING");
+                #[cfg(target_os="linux")]
+                sys::linux::kill_gracefully(id as i32);
+
+                #[cfg(target_os="windows")]
+                sys::windows::kill_gracefully();
+            }
+            Outcome::Cancelled
+        }
+    }
 }
