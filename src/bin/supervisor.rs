@@ -108,36 +108,37 @@ async fn listen_for_shutdown(token: CancellationToken) {
     token.cancel();
 }
 
+type Status = io::Result<ExitStatus>;
+
 #[derive(Debug)]
 enum Outcome {
-    Cancelled,
-    TimedOut,
-    Complete(ExitStatus),
+    Cancelled(Status),
+    TimedOut(Status),
+    Complete(Status),
 }
 
 async fn wait_with_output(child: &mut Child, timeout: u64, token: &CancellationToken) -> Outcome {
     tokio::select! {
         output = child.wait() => {
-            Outcome::Complete(output.unwrap())
+            Outcome::Complete(output)
         }
         _ = time::sleep(Duration::from_secs(timeout)) => {
-            kill(child);
-            Outcome::TimedOut
+            Outcome::TimedOut(kill(child).await)
         }
         _ = token.cancelled() => {
-            kill(child);
-            Outcome::Cancelled
+            Outcome::Cancelled(kill(child).await)
         }
     }
 }
 
-fn kill(child: &mut Child) {
+async fn kill(child: &mut Child) -> Status {
     if let Some(id) = child.id() {
         println!("KILLING");
-        #[cfg(target_os="linux")]
+        #[cfg(target_os = "linux")]
         sys::linux::kill_gracefully(id as i32);
 
-        #[cfg(target_os="windows")]
+        #[cfg(target_os = "windows")]
         sys::windows::kill_gracefully();
     }
+    child.wait().await
 }

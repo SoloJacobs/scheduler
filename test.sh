@@ -1,6 +1,6 @@
 #! /bin/sh
 
 echo "start"
-sleep 10
+sleep 40
 echo "end"
 
