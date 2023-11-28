@@ -1,14 +1,11 @@
 #![cfg(target_os = "linux")]
-use libc;
+use tokio::process::Child;
 
-pub fn interrupt(pid: i32) {
-    unsafe {
-        libc::kill(pid, libc::SIGINT);
-    }
-}
-
-pub fn kill_gracefully(child_id: i32) {
-    unsafe {
-        libc::kill(child_id, libc::SIGTERM);
+pub fn interrupt(child: &mut Child) {
+    if let Some(pid) = child.id() {
+        unsafe {
+            let gid = libc::getpgid(pid as i32);
+            libc::kill(gid, libc::SIGINT);
+        }
     }
 }

@@ -132,13 +132,13 @@ async fn wait_with_output(child: &mut Child, timeout: u64, token: &CancellationT
 }
 
 async fn kill(child: &mut Child) -> Status {
-    if let Some(id) = child.id() {
-        println!("KILLING");
-        #[cfg(target_os = "linux")]
-        sys::linux::kill_gracefully(id as i32);
+    println!("KILLING");
 
-        #[cfg(target_os = "windows")]
-        sys::windows::kill_gracefully();
-    }
+    #[cfg(target_os = "linux")]
+    sys::linux::interrupt(child);
+
+    #[cfg(target_os = "windows")]
+    sys::windows::interrupt();
+
     child.wait().await
 }
