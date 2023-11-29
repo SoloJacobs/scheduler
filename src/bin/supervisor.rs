@@ -39,10 +39,10 @@ async fn main() {
     let token = CancellationToken::new();
     tokio::spawn(listen_for_shutdown(token.clone()));
 
-    run(command, interval, timeout, &token, working_directory).await;
+    schedule(command, interval, timeout, &token, working_directory).await;
 }
 
-async fn run(
+async fn schedule(
     mut command: Command,
     interval: u64,
     timeout: u64,
@@ -55,20 +55,14 @@ async fn run(
         let instant = tokio::select! {
             instant = clock.tick() => { instant }
             _ = token.cancelled() => {
-                    println!("Stopping");
+                    log("Stopping");
                     return
             }
         };
-        let name = instant.duration_since(start).as_secs();
-        let run_directory = working_directory.join(format!("{name}"));
+        let run_directory = name_run_directory(start, instant, &working_directory);
         command = setup(command, &run_directory);
-        let mut status = create_file(&run_directory.join("status")).unwrap();
-        println!("Starting");
-        let mut child = command.spawn().expect("Failed to execute command");
-        let outcome = wait_with_output(&mut child, timeout, token).await;
-        status
-            .write_all(format!("{:?}", outcome).as_bytes())
-            .unwrap();
+        let outcome = wait_with_output(&mut command, timeout, token).await;
+        persist(&outcome, &run_directory);
     }
 }
 
@@ -78,6 +72,22 @@ struct WithPath {
     error: io::Error,
     #[allow(dead_code)]
     path: PathBuf,
+}
+
+fn log(message: &str) {
+    println!("{}", message);
+}
+
+fn name_run_directory(start: Instant, instant: Instant, working_directory: &Path) -> PathBuf {
+    let name = instant.duration_since(start).as_secs();
+    working_directory.join(format!("{name}"))
+}
+
+fn persist(outcome: &Outcome, run_directory: &Path) {
+    let mut status = create_file(&run_directory.join("status")).unwrap();
+    status
+        .write_all(format!("{:?}", outcome).as_bytes())
+        .unwrap();
 }
 
 fn create_file(path: &Path) -> Result<File, WithPath> {
@@ -117,22 +127,28 @@ enum Outcome {
     Complete(Status),
 }
 
-async fn wait_with_output(child: &mut Child, timeout: u64, token: &CancellationToken) -> Outcome {
+async fn wait_with_output(
+    command: &mut Command,
+    timeout: u64,
+    token: &CancellationToken,
+) -> Outcome {
+    log("Starting");
+    let mut child = command.spawn().expect("Failed to execute command");
     tokio::select! {
         output = child.wait() => {
             Outcome::Complete(output)
         }
         _ = time::sleep(Duration::from_secs(timeout)) => {
-            Outcome::TimedOut(kill(child).await)
+            Outcome::TimedOut(kill(&mut child).await)
         }
         _ = token.cancelled() => {
-            Outcome::Cancelled(kill(child).await)
+            Outcome::Cancelled(kill(&mut child).await)
         }
     }
 }
 
 async fn kill(child: &mut Child) -> Status {
-    println!("KILLING");
+    log("KILLING");
 
     #[cfg(target_os = "linux")]
     sys::linux::interrupt(child);
